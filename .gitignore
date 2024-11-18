@@ -1,0 +1,4 @@
+*.json
+*.log
+old_versions/
+input_json_files/
