@@ -19,7 +19,7 @@ Example valid filenames:
 - Python 3.x
 - Required Python packages:
   - `interop`: For parsing Illumina run metrics
-  - Additional dependencies from:
+  - Additional dependencies from [Sophia Genetics](https://api-fr.sophiagenetics.com/uploader/cli/docs/):
     - `adegen.py`
     - `sg-upload-v2-wrapper.py`
 

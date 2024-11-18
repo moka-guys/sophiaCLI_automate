@@ -2,3 +2,6 @@
 *.log
 old_versions/
 input_json_files/
+sg-upload-v2-latest.jar
+sg-upload-v2-wrapper.py
+adegen.py
