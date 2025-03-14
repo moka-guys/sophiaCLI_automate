@@ -2,6 +2,22 @@
 
 Script designed to automate the workflow for processing Sophia DDM requests. Includes QC metric validation, input file generation, and data upload to Sophia DDM platform.
 
+## Workflow
+
+![Workflow Diagram](workflow.png)
+
+## Updates
+
+### v1.1 - BDS Number Automation - 13/03/2025
+
+The script now automatically extracts BDS numbers from the sample sheet:
+
+- Searches for the `*_SampleSheet.csv` file in the run folder
+- Parses the file to find the "Experiment Name" line containing a BDS number
+- Extracts the BDS number in format `BDS-XXXXX` from the experiment name
+- Automatically includes the BDS number in the JSON generation process
+- No manual entry of BDS numbers required during processing
+
 ## IMPORTANT
 
 A regex file is used to determine required metadata for each FASTQ. The naming convention currently approved is:

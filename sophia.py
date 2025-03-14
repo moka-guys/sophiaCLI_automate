@@ -16,6 +16,7 @@ Options:
     --skip-qc: Skip the QC metrics check
     --force: Continue even if QC thresholds are not met
     --dry-run: Print commands without executing them
+    --qc-only: Only run QC metrics check and exit
 
 QC Thresholds:
     - Clusters Passing Filter: ≥ 70%
@@ -70,8 +71,9 @@ def setup_logging(run_name=None):
     
     # File handler (if run_name is provided)
     if run_name:
-        # Create logs directory if it doesn't exist
-        logs_dir = Path("logs")
+        # Create logs directory in the script's directory
+        script_dir = Path(__file__).parent.resolve()
+        logs_dir = script_dir / "logs"
         logs_dir.mkdir(exist_ok=True)
         
         # Create log file in logs directory
@@ -139,7 +141,7 @@ def check_qc_thresholds(metrics):
     """
     logger = logging.getLogger(__name__)
     
-    # Define thresholds (adjust these values as needed)
+    # QC minimum thresholds - can be adjusted as needed
     thresholds = {
         'percent_pf': 70,     # minimum percentage
         'error_rate': 2,      # maximum error rate percentage
@@ -219,7 +221,9 @@ def get_adegen_version():
     """
     logger = logging.getLogger(__name__)
     try:
-        with open("adegen.py", 'r') as f:
+        script_dir = Path(__file__).parent.resolve()
+        adegen_path = script_dir / "adegen.py"
+        with open(adegen_path, 'r') as f:
             for line in f:
                 if line.startswith("VERSION = "):
                     version = line.split("=")[1].strip().strip('"\'')
@@ -228,6 +232,42 @@ def get_adegen_version():
     except Exception as e:
         logger.warning(f"Could not read adegen.py version: {str(e)}")
         return "Unknown"
+
+def get_bds_number(run_folder):
+    """
+    Extract BDS number from SampleSheet.csv file.
+    
+    Args:
+        run_folder (str): Path to the run folder
+        
+    Returns:
+        str: BDS number or None if not found
+    """
+    logger = logging.getLogger(__name__)
+    
+    # Find SampleSheet.csv file that ends with _SampleSheet.csv
+    try:
+        sample_sheet = next(Path(run_folder).glob("*_SampleSheet.csv"))
+    except StopIteration:
+        logger.warning(f"No *_SampleSheet.csv found in {run_folder}")
+        return None
+    
+    try:
+        with open(sample_sheet, 'r') as f:
+            for line in f:
+                if "Experiment Name" in line:
+                    # Extract BDS number
+                    parts = line.strip().split(',')[1]  # Get the experiment name from SampleSheet
+                    if '_BDS-' in parts:
+                        bds_number = 'BDS-' + parts.split('BDS-')[1]
+                        logger.info(f"Found BDS number: {bds_number}")
+                        return bds_number
+    except Exception as e:
+        logger.warning(f"Error reading BDS number from SampleSheet.csv: {str(e)}")
+        return None
+    
+    logger.warning("No BDS number found in SampleSheet.csv")
+    return None
 
 def run_adegen(fastq_folder, run_name, dry_run=False):
     """
@@ -244,15 +284,27 @@ def run_adegen(fastq_folder, run_name, dry_run=False):
     json_file = json_dir / f"{run_name}.inputs.json"
     version = get_adegen_version()
 
+    # Get BDS number from sample sheet
+    bds_number = get_bds_number(fastq_folder.parent.parent.parent)  # Navigate up from BaseCalls to run folder
+    if not bds_number:
+        raise ValueError("Could not find BDS number in SampleSheet.csv")
+
+    script_dir = Path(__file__).parent.resolve()
+    adegen_path = script_dir / "adegen.py"
+    regex_path = script_dir / "msk_regex.txt"
+    jar_path = script_dir / "sg-upload-v2-latest.jar"
+
     cmd = [
         "python3",
-        "adegen.py",
+        str(adegen_path),
         str(fastq_folder),
         "-p", "7043",
         "-r", run_name,
         "-o", str(json_file),
-        "-x", "msk_regex.txt",
-        "-c"
+        "-x", str(regex_path),
+        "-c",
+        "--bdsNumber", bds_number,
+        "--jar", str(jar_path)
     ]
     
     logger = logging.getLogger(__name__)
@@ -330,8 +382,11 @@ def run_upload_wrapper(json_file, dry_run=False):
         json_file (str): Path to the JSON file
         dry_run (bool): If True, only print commands without executing
     """
-    cmd_new = ["python3", "sg-upload-v2-wrapper.py", "new", "--json", json_file]
-    cmd_upload = ["python3", "sg-upload-v2-wrapper.py", "upload"]
+    script_dir = Path(__file__).parent.resolve()
+    upload_wrapper_path = script_dir / "sg-upload-v2-wrapper.py"
+    
+    cmd_new = ["python3", str(upload_wrapper_path), "new", "--json", json_file]
+    cmd_upload = ["python3", str(upload_wrapper_path), "upload"]
     
     logger = logging.getLogger(__name__)
     logger.info("===============================================")
@@ -354,7 +409,7 @@ def run_upload_wrapper(json_file, dry_run=False):
         raise RuntimeError(f"Upload wrapper failed with exit code {e.returncode}")
 
 def main():
-    # Initialize logger without run_name first
+    # Initialise logger without run_name first
     logger = setup_logging()
     
     parser = argparse.ArgumentParser(description="Automate sequencing pipeline workflow")
@@ -367,6 +422,8 @@ def main():
                        help="Continue even if QC thresholds are not met")
     parser.add_argument("--dry-run", action="store_true",
                        help="Print commands without executing them")
+    parser.add_argument("--qc-only", action="store_true",
+                       help="Only run QC metrics check and exit")
     args = parser.parse_args()
     
     try:
@@ -376,10 +433,13 @@ def main():
         # Reinitialize logger with run_name
         logger = setup_logging(run_name)
         
-        # Check QC metrics if not skipped
-        if not args.skip_qc and not args.dry_run:
+        # Check QC metrics if not skipped or if qc-only is specified
+        if (not args.skip_qc and not args.dry_run) or args.qc_only:
             metrics = get_run_metrics(args.run_folder)
             qc_passed = check_qc_thresholds(metrics)
+            
+            if args.qc_only:
+                sys.exit(0 if qc_passed else 1)
             
             if not qc_passed and not args.force:
                 raise ValueError("QC thresholds not met. Use --force to continue anyway.")
